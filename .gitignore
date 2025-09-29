@@ -1,0 +1,25 @@
+# Python and general build artefacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.swp
+*.egg-info/
+dist/
+build/
+.venv/
+
+# IDE specific files
+.vscode/
+.idea/
+
+# Environment files (never commit secrets)
+.env
+.env.*
+
+# Kubernetes and kind generated files
+*.kubeconfig
+kind-*.yaml
+
+# OS specific files
+.DS_Store
