@@ -1,0 +1,92 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zdm-proxy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: zdm-proxy
+  template:
+    metadata:
+      labels:
+        app: zdm-proxy
+    spec:
+      containers:
+      - name: zdm-proxy
+        image: localhost/zdm-demo/zdm-proxy:${ZDM_VERSION}
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 9042
+        env:
+        - name: ZDM_ORIGIN_CONTACT_POINTS
+          value: "cassandra-svc"
+        - name: ZDM_ORIGIN_PORT
+          value: "9042"
+        - name: ZDM_ORIGIN_USERNAME
+          value: "cassandra"
+        - name: ZDM_ORIGIN_PASSWORD
+          value: "cassandra"
+        - name: ZDM_TARGET_USERNAME
+          value: "token"
+        - name: ZDM_TARGET_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: zdm-proxy-secret
+              key: astra-password
+        - name: ZDM_TARGET_SECURE_CONNECT_BUNDLE_PATH
+          value: "/etc/astra/secure-connect.zip"
+        - name: ZDM_PROXY_LISTEN_ADDRESS
+          value: "0.0.0.0"
+        - name: ZDM_PROXY_LISTEN_PORT
+          value: "9042"
+        - name: ZDM_READ_MODE
+          value: "PRIMARY_ONLY"
+        - name: ZDM_WRITE_MODE
+          value: "PRIMARY_ONLY"
+        - name: ZDM_LOG_LEVEL
+          value: "DEBUG"
+        # Add resource limits to prevent memory issues
+        resources:
+          requests:
+            cpu: 250m
+            memory: 512Mi
+          limits:
+            cpu: 500m
+            memory: 1Gi
+        # Add health checks with more generous timing for custom builds
+        livenessProbe:
+          tcpSocket:
+            port: 9042
+          initialDelaySeconds: 180
+          periodSeconds: 60
+          timeoutSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          tcpSocket:
+            port: 9042
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        volumeMounts:
+        - name: astra-secrets
+          mountPath: /etc/astra
+          readOnly: true
+      volumes:
+      - name: astra-secrets
+        secret:
+          secretName: zdm-proxy-secret
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: zdm-proxy-svc
+spec:
+  selector:
+    app: zdm-proxy
+  ports:
+    - protocol: TCP
+      port: 9042
+      targetPort: 9042
+  type: ClusterIP

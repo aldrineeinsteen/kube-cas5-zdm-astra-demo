@@ -23,3 +23,8 @@ kind-*.yaml
 
 # OS specific files
 .DS_Store
+
+# Authentication files
+secure*.zip
+.env
+*token.json

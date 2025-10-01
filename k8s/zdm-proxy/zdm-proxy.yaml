@@ -1,0 +1,155 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: zdm-proxy-config
+data:
+  application.conf: |
+    zdm {
+      # Source cluster configuration (Cassandra)
+      origin {
+        contact_points = ["cassandra-svc:9042"]
+        local_datacenter = "DC1-Demo"
+        username = "cassandra"
+        password = "cassandra"
+      }
+      
+      # Target cluster configuration (Astra DB)
+      target {
+        contact_points = []  # Will be overridden by Astra bundle
+        local_datacenter = ""  # Will be set by Astra bundle
+        secure_connect_bundle_path = "/etc/astra/secure-connect.zip"
+        username = ""  # Will be set from secret
+        password = ""  # Will be set from secret
+      }
+      
+      # ZDM Proxy configuration
+      proxy {
+        listen_address = "0.0.0.0"
+        listen_port = 9042
+        primary_cluster = "ORIGIN"  # ORIGIN, TARGET, or determined by phase
+        read_mode = "PRIMARY_ONLY"  # PRIMARY_ONLY, DUAL_ASYNC_ON_SECONDARY
+        
+        # Phase-specific configuration (will be controlled by env vars)
+        async_handoff_enabled = true
+        heartbeat_interval_ms = 30000
+        
+        # Request routing
+        request_timeout_ms = 12000
+        connection_timeout_ms = 5000
+      }
+      
+      # Monitoring and metrics
+      monitoring {
+        enable_metrics = true
+        metrics_port = 14001
+      }
+      
+      # Logging configuration
+      logging {
+        level = "INFO"
+        pattern = "%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+      }
+    }
+---
+# Note: The zdm-proxy-secret will be created by the Makefile
+# using kubectl create secret with actual Astra credentials and secure connect bundle
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zdm-proxy
+  labels:
+    app: zdm-proxy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: zdm-proxy
+  template:
+    metadata:
+      labels:
+        app: zdm-proxy
+    spec:
+      containers:
+      - name: zdm-proxy
+        image: datastax/zdm-proxy:2.1.0
+        ports:
+        - containerPort: 9042
+          name: cql
+        - containerPort: 14001
+          name: metrics
+        env:
+        # Basic ZDM configuration - minimal environment variables
+        - name: ZDM_ORIGIN_CONTACT_POINTS
+          value: "cassandra-svc:9042"
+        - name: ZDM_ORIGIN_USERNAME
+          value: "cassandra"
+        - name: ZDM_ORIGIN_PASSWORD
+          value: "cassandra"
+        - name: ZDM_TARGET_SECURE_CONNECT_BUNDLE_PATH
+          value: "/etc/astra/secure-connect.zip"
+        - name: ZDM_TARGET_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: zdm-proxy-secret
+              key: astra-username
+        - name: ZDM_TARGET_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: zdm-proxy-secret
+              key: astra-password
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        volumeMounts:
+        - name: zdm-config
+          mountPath: /etc/zdm
+        - name: astra-bundle
+          mountPath: /etc/astra
+          readOnly: true
+        readinessProbe:
+          tcpSocket:
+            port: 9042
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+        livenessProbe:
+          tcpSocket:
+            port: 9042
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 5
+      volumes:
+      - name: zdm-config
+        configMap:
+          name: zdm-proxy-config
+      - name: astra-bundle
+        secret:
+          secretName: zdm-proxy-secret
+          items:
+          - key: secure-connect.zip
+            path: secure-connect.zip
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: zdm-proxy-svc
+  labels:
+    app: zdm-proxy
+spec:
+  ports:
+  - port: 9042
+    targetPort: 9042
+    name: cql
+    nodePort: 30043
+  - port: 14001
+    targetPort: 14001
+    name: metrics
+    nodePort: 30044
+  type: NodePort
+  selector:
+    app: zdm-proxy

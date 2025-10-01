@@ -1,0 +1,48 @@
+# Custom ZDM Proxy Dockerfile for ARM64/AMD64 builds from source
+ARG ZDMVERSION=v2.3.4
+FROM golang:1.24-bullseye AS builder
+
+# Accept build argument for version
+ARG ZDMVERSION
+
+# Set build environment
+ENV GO111MODULE=on \
+    CGO_ENABLED=0 \
+    GOOS=linux
+
+# Determine architecture at build time
+ARG TARGETARCH
+ENV GOARCH=${TARGETARCH}
+
+WORKDIR /build
+
+# Clone the ZDM proxy repository at the specified version
+RUN git clone https://github.com/datastax/zdm-proxy.git . && \
+    git checkout ${ZDMVERSION}
+
+# Download dependencies
+RUN go mod download
+
+# Build the application
+RUN go build -o main ./proxy
+
+# Final stage - minimal runtime image
+FROM debian:bullseye-slim
+
+# Install minimal runtime dependencies
+RUN apt-get update && \
+    apt-get install -y ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+# Copy the built binary
+COPY --from=builder /build/main /app/zdm-proxy
+
+# Create non-root user
+RUN groupadd -r zdm && useradd -r -g zdm zdm
+USER zdm
+
+WORKDIR /app
+
+EXPOSE 9042
+
+ENTRYPOINT ["./zdm-proxy"]

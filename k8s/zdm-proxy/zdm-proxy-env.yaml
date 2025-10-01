@@ -1,0 +1,90 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zdm-proxy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: zdm-proxy
+  template:
+    metadata:
+      labels:
+        app: zdm-proxy
+    spec:
+      containers:
+      - name: zdm-proxy
+        image: datastax/zdm-proxy:2.3.4
+        ports:
+        - containerPort: 9042
+        env:
+        - name: ZDM_ORIGIN_CONTACT_POINTS
+          value: "cassandra-svc"
+        - name: ZDM_ORIGIN_PORT
+          value: "9042"
+        - name: ZDM_ORIGIN_USERNAME
+          value: "cassandra"
+        - name: ZDM_ORIGIN_PASSWORD
+          value: "cassandra"
+        - name: ZDM_TARGET_USERNAME
+          value: "token"
+        - name: ZDM_TARGET_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: zdm-proxy-secret
+              key: astra-password
+        - name: ZDM_TARGET_SECURE_CONNECT_BUNDLE_PATH
+          value: "/etc/astra/secure-connect.zip"
+        - name: ZDM_PROXY_LISTEN_ADDRESS
+          value: "0.0.0.0"
+        - name: ZDM_PROXY_LISTEN_PORT
+          value: "9042"
+        - name: ZDM_READ_MODE
+          value: "PRIMARY_ONLY"
+        - name: ZDM_WRITE_MODE
+          value: "PRIMARY_ONLY"
+        - name: ZDM_LOG_LEVEL
+          value: "DEBUG"
+        # Add resource limits to prevent memory issues
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        volumeMounts:
+        - name: astra-secrets
+          mountPath: /etc/astra
+          readOnly: true
+        # Disable readiness probe to test stability
+        # readinessProbe:
+        #   tcpSocket:
+        #     port: 9042
+        #   initialDelaySeconds: 120
+        #   periodSeconds: 30
+        #   timeoutSeconds: 10
+        #   failureThreshold: 5
+        livenessProbe:
+          tcpSocket:
+            port: 9042
+          initialDelaySeconds: 180
+          periodSeconds: 60
+          timeoutSeconds: 10
+          failureThreshold: 3
+      volumes:
+      - name: astra-secrets
+        secret:
+          secretName: zdm-proxy-secret
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: zdm-proxy-svc
+spec:
+  selector:
+    app: zdm-proxy
+  ports:
+  - port: 9042
+    targetPort: 9042
+    name: cql

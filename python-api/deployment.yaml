@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: python-api
+  labels:
+    app: python-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: python-api
+  template:
+    metadata:
+      labels:
+        app: python-api
+    spec:
+      containers:
+      - name: python-api
+        image: localhost/python-api:latest
+        imagePullPolicy: Never  # Use local image built with kind
+        ports:
+        - containerPort: 8080
+        env:
+        - name: CASSANDRA_HOST
+          value: "cassandra-svc"  # Phase A: Direct connection to Cassandra
+        - name: CASSANDRA_PORT
+          value: "9042"
+        - name: CASSANDRA_USERNAME
+          value: "cassandra"
+        - name: CASSANDRA_PASSWORD
+          value: "cassandra"
+        - name: KEYSPACE
+          value: "demo"
+        - name: TABLE
+          value: "users"
+        - name: ZDM_PHASE
+          value: "A"
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+        readinessProbe:
+          httpGet:
+            path: "/"
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: "/"
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: python-api-svc
+  labels:
+    app: python-api
+spec:
+  ports:
+  - port: 8080
+    targetPort: 8080
+    nodePort: 30080
+  type: NodePort
+  selector:
+    app: python-api

@@ -1,0 +1,136 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: data-generator
+  labels:
+    app: data-generator
+spec:
+  template:
+    metadata:
+      labels:
+        app: data-generator
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: data-generator
+        image: python:3.11-slim
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          apt-get update && apt-get install -y gcc
+          pip install cassandra-driver==3.28.0 faker==19.6.2
+          python -c "
+          import os, sys, uuid, random
+          from cassandra.cluster import Cluster
+          from cassandra.auth import PlainTextAuthProvider
+          from faker import Faker
+
+          CASSANDRA_HOST = os.getenv('CASSANDRA_HOST', 'cassandra-svc')
+          CASSANDRA_PORT = int(os.getenv('CASSANDRA_PORT', '9042'))
+          CASSANDRA_USERNAME = os.getenv('CASSANDRA_USERNAME', 'cassandra')
+          CASSANDRA_PASSWORD = os.getenv('CASSANDRA_PASSWORD', 'cassandra')
+          KEYSPACE = os.getenv('KEYSPACE', 'demo')
+          TABLE = os.getenv('TABLE', 'users')
+          ROW_COUNT = int(os.getenv('ROW_COUNT', '1000'))
+
+          fake = Faker(['en_GB'])
+
+          print('=== Cassandra 5 ZDM Demo Data Generator ===')
+          print(f'Target: {CASSANDRA_HOST}:{CASSANDRA_PORT}')
+          print(f'Keyspace: {KEYSPACE}')
+          print(f'Table: {TABLE}')
+          print(f'Rows to generate: {ROW_COUNT}')
+
+          auth_provider = PlainTextAuthProvider(username=CASSANDRA_USERNAME, password=CASSANDRA_PASSWORD)
+          cluster = Cluster([CASSANDRA_HOST], port=CASSANDRA_PORT, auth_provider=auth_provider, connect_timeout=30)
+
+          max_retries = 10
+          session = None
+          for attempt in range(max_retries):
+              try:
+                  session = cluster.connect()
+                  print(f'Connected to Cassandra at {CASSANDRA_HOST}:{CASSANDRA_PORT}')
+                  break
+              except Exception as e:
+                  print(f'Connection attempt {attempt + 1}/{max_retries} failed: {e}')
+                  if attempt < max_retries - 1:
+                      import time
+                      time.sleep(10)
+                  else:
+                      print('Failed to connect to Cassandra after all retries')
+                      sys.exit(1)
+
+          keyspace_cql = f\"CREATE KEYSPACE IF NOT EXISTS {KEYSPACE} WITH REPLICATION = {{'class': 'SimpleStrategy', 'replication_factor': 1}}\"
+          session.execute(keyspace_cql)
+          print(f'Keyspace {KEYSPACE} created/verified')
+
+          session.set_keyspace(KEYSPACE)
+
+          table_cql = f'CREATE TABLE IF NOT EXISTS {TABLE} (id UUID PRIMARY KEY, name TEXT, email TEXT, gender TEXT, address TEXT)'
+          session.execute(table_cql)
+          print(f'Table {KEYSPACE}.{TABLE} created/verified')
+
+          insert_cql = f'INSERT INTO {TABLE} (id, name, email, gender, address) VALUES (?, ?, ?, ?, ?)'
+          prepared = session.prepare(insert_cql)
+
+          print(f'Generating {ROW_COUNT} rows of demo data...')
+          batch_size = 100
+          inserted = 0
+
+          for i in range(ROW_COUNT):
+              user_id = uuid.uuid4()
+              name = fake.name()
+              email = fake.email()
+              gender = random.choice(['Male', 'Female', 'Non-binary', 'Prefer not to say'])
+              address = fake.address().replace('\n', ', ')
+
+              try:
+                  session.execute(prepared, (user_id, name, email, gender, address))
+                  inserted += 1
+
+                  if (i + 1) % batch_size == 0:
+                      print(f'Inserted {i + 1}/{ROW_COUNT} rows...')
+
+              except Exception as e:
+                  print(f'Error inserting row {i + 1}: {e}')
+
+          print(f'Successfully inserted {inserted} rows into {KEYSPACE}.{TABLE}')
+
+          count_cql = f'SELECT COUNT(*) FROM {TABLE}'
+          result = session.execute(count_cql)
+          count = result.one()[0]
+          print(f'Verification: {count} total rows in {KEYSPACE}.{TABLE}')
+
+          sample_cql = f'SELECT id, name, email, gender FROM {TABLE} LIMIT 5'
+          results = session.execute(sample_cql)
+
+          print('Sample records:')
+          for row in results:
+              print(f'  {row.id} | {row.name} | {row.email} | {row.gender}')
+
+          print('✅ Data generation completed successfully!')
+          cluster.shutdown()
+          "
+        env:
+        - name: CASSANDRA_HOST
+          value: "cassandra-svc"
+        - name: CASSANDRA_PORT
+          value: "9042"
+        - name: CASSANDRA_USERNAME
+          value: "cassandra"
+        - name: CASSANDRA_PASSWORD
+          value: "cassandra"
+        - name: KEYSPACE
+          value: "demo"
+        - name: TABLE
+          value: "users"
+        - name: ROW_COUNT
+          value: "1000"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+  backoffLimit: 3
