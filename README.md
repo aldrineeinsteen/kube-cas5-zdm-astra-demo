@@ -21,6 +21,13 @@ The demo follows a structured progression through migration phases:
 - **Make** (Build automation)
 - **curl** & **jq** (For testing)
 
+### Resource Requirements
+
+**Docker Desktop Settings** (recommended):
+- **Memory**: 6GB minimum (8GB preferred)
+- **CPUs**: 4 cores minimum
+- **Disk**: 20GB free space
+
 ## Quick Setup
 
 ### 1. Environment Configuration
@@ -46,7 +53,10 @@ make up
 # Generate demo data (1000 records)
 make data
 
-# Verify Cassandra is ready
+# Deploy API
+make api
+
+# Verify everything is ready
 make status
 ```
 
@@ -103,21 +113,10 @@ make zdm-custom
 kubectl get pods -l app=zdm-proxy
 kubectl logs -l app=zdm-proxy --tail=5
 
-# Patch API to use ZDM service (using helper script)
-./demo-helper.sh patch-api-zdm
-
-# OR manually patch API to use ZDM service:
-kubectl patch deployment python-api -p '{
-  "spec": {
-    "template": {
-      "spec": {
-        "containers": [{
-          "name": "python-api",
-          "env": [
-            {"name": "CASSANDRA_HOST", "value": "zdm-proxy-svc"},
-            {"name": "CASSANDRA_PORT", "value": "9042"},
-            {"name": "CASSANDRA_USERNAME", "value": "cassandra"},
-            {"name": "CASSANDRA_PASSWORD", "value": "cassandra"},
+# Switch API to use ZDM proxy:
+# Edit python-api/deployment.yaml to change CASSANDRA_HOST from "cassandra-svc" to "zdm-proxy-svc"
+# Then apply the changes:
+kubectl apply -f python-api/deployment.yaml
             {"name": "KEYSPACE", "value": "demo"},
             {"name": "TABLE", "value": "users"}
           ]
@@ -359,6 +358,34 @@ DROP KEYSPACE demo;
 ```
 
 ---
+
+## Troubleshooting
+
+### Memory Issues
+
+If you see `Insufficient memory` errors or pods stuck in `Pending` state:
+
+1. **Check current memory usage:**
+   ```bash
+   kubectl describe node zdm-demo-control-plane | grep -A 10 "Allocated resources"
+   ```
+
+2. **If memory usage is >95%, increase container runtime resources:**
+   - **Docker Desktop**: Settings → Resources → Advanced → Memory (6-8GB)
+   - **Podman Desktop**: Settings → Resources → Memory (6-8GB)
+
+3. **Temporary workaround** (reduce resource requests):
+   ```bash
+   kubectl rollout undo deployment/python-api  # Revert failed rollout
+   ```
+
+### Deployment Rollout Issues
+
+If `./demo-helper.sh patch-api-zdm` times out:
+```bash
+kubectl rollout undo deployment/python-api    # Revert to working state
+kubectl rollout status deployment/python-api  # Wait for completion
+```
 
 ## Additional Documentation
 

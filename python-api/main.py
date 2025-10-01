@@ -57,10 +57,23 @@ def get_cassandra_session():
     global cluster, session
     
     if session is None:
-        auth_provider = PlainTextAuthProvider(
-            username=CASSANDRA_USERNAME,
-            password=CASSANDRA_PASSWORD
-        )
+        # Use Astra token credentials when connecting through ZDM proxy
+        if CASSANDRA_HOST == "zdm-proxy-svc":
+            # When connecting through ZDM proxy, use Astra token credentials
+            # ZDM proxy forwards requests based on client credentials
+            astra_token = os.getenv('ASTRA_TOKEN')
+            if not astra_token:
+                raise Exception("ASTRA_TOKEN environment variable is required when connecting through ZDM proxy")
+            auth_provider = PlainTextAuthProvider(
+                username="token",
+                password=astra_token
+            )
+        else:
+            # Direct connection to Cassandra
+            auth_provider = PlainTextAuthProvider(
+                username=CASSANDRA_USERNAME,
+                password=CASSANDRA_PASSWORD
+            )
         
         print(f"Attempting connection to {CASSANDRA_HOST}:{CASSANDRA_PORT}")
         
