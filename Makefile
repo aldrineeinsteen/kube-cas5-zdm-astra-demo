@@ -141,6 +141,39 @@ logs: ## Show logs from all components
 	@echo "=== ZDM Proxy Logs ==="
 	kubectl logs -l app=zdm-proxy --tail=50 || true
 
+sync: ## Run DSBulk Migrator data synchronization job (DataStax Phase 2)
+	@echo "🚀 Starting DataStax Phase 2: Data Migration with DSBulk Migrator"
+	@echo "Checking prerequisites..."
+	@if ! kubectl get secret zdm-proxy-secret >/dev/null 2>&1; then \
+		echo "❌ Error: zdm-proxy-secret not found. Run 'make zdm' first."; \
+		exit 1; \
+	fi
+	@if ! kubectl get service cassandra-svc >/dev/null 2>&1; then \
+		echo "❌ Error: Cassandra service not found. Run 'make up' first."; \
+		exit 1; \
+	fi
+	@echo "✅ Prerequisites check passed"
+	@echo "Deleting any previous migration job..."
+	kubectl delete job dsbulk-migrator-sync --ignore-not-found=true
+	@echo "Starting DSBulk Migrator data synchronization..."
+	kubectl apply -f k8s/data-sync/dsbulk-sync-job.yaml
+	@echo "⏳ Waiting for migration job to complete (this will take 5-10 minutes)..."
+	@echo "   Building DSBulk Migrator from source and performing live migration..."
+	kubectl wait --for=condition=Complete job/dsbulk-migrator-sync --timeout=900s || { \
+		echo "❌ Migration job failed or timed out. Checking logs..."; \
+		kubectl logs job/dsbulk-migrator-sync --tail=100; \
+		exit 1; \
+	}
+	@echo "✅ DSBulk Migrator data synchronization completed successfully!"
+	@echo "📊 Checking migration results..."
+	kubectl logs job/dsbulk-migrator-sync --tail=30
+	@echo ""
+	@echo "🎉 DataStax Phase 2 completed!"
+	@echo "Next steps:"
+	@echo "  - Verify data counts: kubectl exec -it cassandra-0 -- cqlsh -e \"SELECT COUNT(*) FROM demo.users;\""
+	@echo "  - Check Astra DB via console or API"
+	@echo "  - Proceed to Phase 3: Enable async dual reads (optional)"
+
 down: ## Teardown kind cluster
 	@echo "Tearing down kind cluster..."
 	kind delete cluster --name $(CLUSTER_NAME)

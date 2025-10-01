@@ -12,10 +12,12 @@ This project demonstrates migrating from Apache Cassandra 5 to DataStax Astra DB
 
 ## Migration Workflow
 
-**Phase Configuration managed via ZDM proxy deployment updates:**
-- **Phase A**: Direct writes to source Cassandra only
-- **Phase B**: Dual writes through ZDM proxy to both Cassandra and Astra
-- **Phase C**: Cutover - all traffic routed to Astra DB
+**Official DataStax 5-Phase Migration Process:**
+- **Phase 1**: Deploy ZDM Proxy - dual writes automatically active when both clusters configured
+- **Phase 2**: Migrate existing data from origin to target
+- **Phase 3**: Enable async dual reads (optional testing phase)
+- **Phase 4**: Route primary reads to target cluster
+- **Phase 5**: Direct connection to target, decommission origin
 
 ## Essential Commands
 
@@ -33,6 +35,10 @@ make down     # Clean teardown
 - Source cluster: `cassandra-svc:9042` (in-cluster service)
 - Target: Astra DB via Secure Connect Bundle
 - Phase switching via environment variables
+
+**Important ZDM Behavior:**
+- ZDM Phase 1 automatically activates dual-write when both origin and target are configured
+- Environment variables `ZDM_READ_MODE=PRIMARY_ONLY` and `ZDM_WRITE_MODE=PRIMARY_ONLY` are correct but dual-write logic is still active per DataStax specifications
 
 **Common Issues:**
 - Proxy fails to start: Check Astra credentials in Secret

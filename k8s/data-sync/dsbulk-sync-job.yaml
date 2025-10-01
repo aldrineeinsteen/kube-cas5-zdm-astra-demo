@@ -1,0 +1,117 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: dsbulk-migrator-sync
+  labels:
+    app: dsbulk-migrator
+spec:
+  ttlSecondsAfterFinished: 3600  # Clean up after 1 hour
+  template:
+    metadata:
+      labels:
+        app: dsbulk-migrator
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: dsbulk-migrator
+        image: openjdk:11-jdk-slim
+        command: ["/bin/bash"]
+        args:
+          - -c
+          - |
+            set -e
+            echo "🚀 Starting DataStax Phase 2: Data Migration with DSBulk Migrator"
+            echo "================================================================="
+            
+            # Install required tools
+            apt-get update && apt-get install -y git maven netcat-openbsd curl
+            
+            # Wait for services to be ready
+            echo "Waiting for Cassandra service..."
+            until nc -z cassandra-svc 9042; do
+              echo "Waiting for Cassandra..."
+              sleep 5
+            done
+            echo "✅ Cassandra is ready"
+            
+            # Clone and build DSBulk Migrator
+            echo "� Cloning DSBulk Migrator..."
+            cd /tmp
+            git clone https://github.com/datastax/dsbulk-migrator.git
+            cd dsbulk-migrator
+            
+            echo "🔨 Building DSBulk Migrator (this may take a few minutes)..."
+            mvn clean package -q -DskipTests
+            
+            # Find the built JAR
+            MIGRATOR_JAR=$(find target -name "*embedded-dsbulk.jar" | head -1)
+            if [ -z "$MIGRATOR_JAR" ]; then
+              echo "❌ DSBulk Migrator JAR not found after build"
+              exit 1
+            fi
+            echo "✅ DSBulk Migrator built: $MIGRATOR_JAR"
+            
+            # Run live migration
+            echo "📦 Starting live migration from Cassandra to Astra DB..."
+            java -jar "$MIGRATOR_JAR" migrate-live \
+              --dsbulk-use-embedded \
+              --data-dir="/tmp/migration-data" \
+              --dsbulk-log-dir="/tmp/migration-logs" \
+              --export-host=cassandra-svc \
+              --export-username=cassandra \
+              --export-password=cassandra \
+              --import-bundle="/etc/astra/secure-connect.zip" \
+              --import-username=token \
+              --import-password="$ASTRA_TOKEN" \
+              --keyspaces="demo" \
+              --tables="users" \
+              --export-max-concurrent-queries=10 \
+              --import-max-concurrent-queries=10 \
+              --export-dsbulk-option="--executor.maxPerSecond=1000" \
+              --import-dsbulk-option="--executor.maxPerSecond=500" \
+              --import-dsbulk-option="--schema.allowMissingFields=true"
+            
+            echo "✅ DSBulk Migrator completed successfully!"
+            echo "📊 Migration summary:"
+            
+            # Show migration logs summary
+            if [ -d "/tmp/migration-logs" ]; then
+              echo "📋 Migration logs summary:"
+              find /tmp/migration-logs -name "*.log" -exec tail -5 {} \; 2>/dev/null || true
+            fi
+            
+            echo ""
+            echo "🎉 DataStax Phase 2 migration finished successfully!"
+            echo ""
+            echo "Next Steps:"
+            echo "1. Verify data counts match between Cassandra and Astra DB"
+            echo "2. Proceed to Phase 3: Enable async dual reads (optional)"
+            echo "3. Or jump to Phase 4: Route reads to target cluster"
+        
+        env:
+        - name: ASTRA_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: zdm-proxy-secret
+              key: astra-password
+        
+        volumeMounts:
+        - name: astra-bundle
+          mountPath: /etc/astra
+          readOnly: true
+        
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "200m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+      
+      volumes:
+      - name: astra-bundle
+        secret:
+          secretName: zdm-proxy-secret
+          items:
+          - key: secure-connect.zip
+            path: secure-connect.zip

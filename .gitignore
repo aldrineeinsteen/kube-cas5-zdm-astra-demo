@@ -8,6 +8,10 @@ __pycache__/
 dist/
 build/
 .venv/
+venv/
+env/
+*-test-env/
+astra-test-env/
 
 # IDE specific files
 .vscode/
