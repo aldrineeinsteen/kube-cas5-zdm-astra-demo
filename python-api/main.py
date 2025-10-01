@@ -98,7 +98,7 @@ def get_cassandra_session():
                 print(f"Successfully connected to Astra DB, keyspace: {KEYSPACE}")
                 
             elif CONNECTION_MODE == 'zdm' or CASSANDRA_HOST == "zdm-proxy-svc":
-                # ZDM proxy connection
+                # ZDM proxy connection - requires token authentication
                 print(f"Connecting through ZDM proxy to {CASSANDRA_HOST}:{CASSANDRA_PORT}...")
                 
                 if not ASTRA_TOKEN:

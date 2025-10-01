@@ -1,41 +1,26 @@
 # Cassandra 5 Zero Downtime Migration Demo
-# Makefile for managing the complete migration workflow
+# Simplified Makefile for core deployment commands only
 
-.PHONY: help setup cassandra data test-data api test-api zdm test-zdm sync test-sync phase-dual test-dual phase-astra test-astra cleanup down status logs
+.PHONY: help setup cassandra data api zdm build-zdm build-images down
 
 CLUSTER_NAME := zdm-demo
 NAMESPACE := default
 CONTAINER_ENGINE := podman
 
 help: ## Show this help message
-	@echo "Cassandra 5 Zero Downtime Migration Demo - Complete Workflow"
+	@echo "Cassandra 5 Zero Downtime Migration Demo - Core Commands"
 	@echo ""
-	@echo "Main Demo Flow:"
+	@echo "Core Deployment Flow:"
 	@echo "  setup      - Create kind cluster"
 	@echo "  cassandra  - Deploy Cassandra StatefulSet"
 	@echo "  data       - Generate demo data (1000 records)"
-	@echo "  test-data  - Verify data in Cassandra"
-	@echo "  api        - Deploy Python API"
-	@echo "  test-api   - Test API connectivity"
-	@echo "  zdm        - Deploy ZDM proxy"
-	@echo "  test-zdm   - Test ZDM proxy connection"
-	@echo "  sync       - Run data synchronization (DSBulk)"
-	@echo "  test-sync  - Verify data count in both clusters"
-	@echo "  phase-dual - Switch to dual-write mode"
-	@echo "  test-dual  - Test dual-write functionality"
-	@echo "  phase-astra- Direct Astra connection (Phase 5)"
-	@echo "  test-astra - Test direct Astra connection"
-	@echo "  cleanup    - Remove ZDM proxy"
+	@echo "  api        - Deploy Python API (connects to cassandra-svc by default)"
+	@echo "  zdm        - Build and deploy ZDM proxy (ARM64 compatible)"
 	@echo ""
 	@echo "Utility Commands:"
-	@echo "  status     - Check all components"
-	@echo "  logs       - Show logs from all services"
 	@echo "  down       - Teardown entire cluster"
 	@echo ""
-	@echo "ZDM Phase Management:"
-	@echo "  phase-a    - Set ZDM to Phase A (source only)"
-	@echo "  phase-b    - Set ZDM to Phase B (dual write)"
-	@echo "  phase-c    - Set ZDM to Phase C (target only)"
+	@echo "For testing, patching, and phase management commands, see README.md"
 
 setup: kind-config.yaml ## Create kind cluster
 	@echo "🚀 Creating kind cluster..."
@@ -51,22 +36,14 @@ cassandra: ## Deploy Cassandra StatefulSet
 	kubectl wait --for=condition=Ready pod -l app=cassandra --timeout=300s
 	@echo "✅ Cassandra is ready!"
 
-
-
 data: build-images ## Generate demo data (1000 records)
 	@echo "🚀 Generating demo data..."
-	kubectl delete job data-generator --ignore-not-found=true
 	kubectl apply -f k8s/data-generator/
 	@echo "⏳ Waiting for data generation to complete..."
-	kubectl wait --for=condition=Complete job/data-generator --timeout=300s
+	kubectl wait --for=condition=complete job/data-generator --timeout=300s
 	@echo "✅ Demo data generated successfully!"
 
-test-data: ## Verify data in Cassandra
-	@echo "🔍 Testing Cassandra data..."
-	@kubectl exec -it cassandra-0 -- cqlsh -e "SELECT COUNT(*) FROM demo.users;"
-	@echo "✅ Expected: 1000 rows"
-
-api: build-images ## Deploy Python API
+api: build-images ## Deploy Python API (connects to cassandra-svc by default)
 	@echo "🚀 Deploying Python API..."
 	kubectl apply -f python-api/
 	@echo "⏳ Waiting for API deployment to be ready..."
@@ -74,17 +51,11 @@ api: build-images ## Deploy Python API
 	@echo "✅ Python API deployed successfully!"
 	@echo "📍 API accessible at: http://localhost:8080"
 
-test-api: ## Test API connectivity
-	@echo "🔍 Testing API connectivity..."
-	@curl -s http://localhost:8080/ | jq .
-	@curl -s http://localhost:8080/users?limit=5 | jq .
-	@echo "✅ API responding correctly"
-
 build-zdm: ## Build ZDM proxy ARM64 image and load into kind
 	@echo "🏗️  Building ZDM proxy ARM64 image..."
 	@./scripts/build-zdm-arm64.sh
 
-zdm: build-zdm ## Deploy ZDM proxy (builds ARM64 image first)
+zdm: build-zdm ## Build and deploy ZDM proxy (ARM64 compatible)
 	@echo "🚀 Deploying ZDM proxy..."
 	@if [ ! -f ".env" ]; then \
 		echo "❌ Error: .env file not found!"; \
@@ -125,113 +96,13 @@ zdm: build-zdm ## Deploy ZDM proxy (builds ARM64 image first)
 	}
 	@echo "✅ ZDM proxy deployed successfully!"
 
-test-zdm: ## Test ZDM proxy connection
-	@echo "🔍 Testing ZDM proxy connection..."
-	@kubectl patch deployment python-api -p '{"spec":{"template":{"spec":{"containers":[{"name":"python-api","env":[{"name":"CONNECTION_MODE","value":"zdm"},{"name":"CASSANDRA_CONTACT_POINTS","value":"zdm-proxy-svc:9042"},{"name":"KEYSPACE","value":"demo"},{"name":"TABLE","value":"users"}]}]}}}}'
-	@kubectl rollout status deployment/python-api --timeout=120s
-	@sleep 10
-	@curl -s http://localhost:8080/ | jq .
-	@echo "✅ ZDM proxy connection verified"
-
-status: ## Check status of all components
-	@echo "=== 📊 Demo Status ==="
-	@echo "Cluster Info:"
-	kubectl cluster-info --context kind-$(CLUSTER_NAME) 2>/dev/null || echo "Cluster not found"
-	@echo ""
-	@echo "Pods:"
-	kubectl get pods -o wide
-	@echo ""
-	@echo "Services:"
-	kubectl get services
-	@echo ""
-	@echo "Deployments:"
-	kubectl get deployments
-
-logs: ## Show logs from all components
-	@echo "=== 📜 Cassandra Logs ==="
-	kubectl logs -l app=cassandra --tail=20 || echo "No Cassandra logs"
-	@echo ""
-	@echo "=== 📜 Data Generator Logs ==="
-	kubectl logs job/data-generator --tail=20 || echo "No data generator logs"
-	@echo ""
-	@echo "=== 📜 Python API Logs ==="
-	kubectl logs -l app=python-api --tail=20 || echo "No API logs"
-	@echo ""
-	@echo "=== 📜 ZDM Proxy Logs ==="
-	kubectl logs -l app=zdm-proxy --tail=20 || echo "No ZDM proxy logs"
-
-sync: ## Run data synchronization with DSBulk
-	@echo "🚀 Starting DataStax Phase 2: Data Migration with DSBulk Migrator"
-	@echo "📋 Checking prerequisites..."
-	@if ! kubectl get secret zdm-proxy-secret >/dev/null 2>&1; then \
-		echo "❌ Error: zdm-proxy-secret not found. Run 'make zdm' first."; \
-		exit 1; \
-	fi
-	@if ! kubectl get service cassandra-svc >/dev/null 2>&1; then \
-		echo "❌ Error: Cassandra service not found. Run 'make cassandra' first."; \
-		exit 1; \
-	fi
-	@echo "✅ Prerequisites check passed"
-	kubectl delete job dsbulk-migrator-sync --ignore-not-found=true
-	kubectl apply -f k8s/data-sync/dsbulk-sync-job.yaml
-	@echo "⏳ Waiting for migration job to complete (5-10 minutes)..."
-	kubectl wait --for=condition=Complete job/dsbulk-migrator-sync --timeout=900s || { \
-		echo "❌ Migration job failed. Checking logs..."; \
-		kubectl logs job/dsbulk-migrator-sync --tail=100; \
-		exit 1; \
-	}
-	@echo "✅ DSBulk data synchronization completed!"
-	kubectl logs job/dsbulk-migrator-sync --tail=30
-
-test-sync: ## Verify data count in both clusters
-	@echo "🔍 Testing data synchronization..."
-	@echo "📊 Cassandra count:"
-	@kubectl exec -it cassandra-0 -- cqlsh -e "SELECT COUNT(*) FROM demo.users;"
-	@echo "📊 Astra DB count (check via console or direct connection)"
-	@echo "✅ Data synchronization verified"
-
-phase-dual: ## Switch to dual-write mode
-	@echo "🚀 Switching to dual-write mode..."
-	@./k8s/zdm-proxy/update-zdm-phase.sh DUAL_WRITE
-	@echo "⏳ Waiting for ZDM proxy to restart..."
-	@kubectl rollout status deployment/zdm-proxy --timeout=120s
-	@echo "✅ Dual-write mode enabled"
-
-test-dual: ## Test dual-write functionality
-	@echo "🔍 Testing dual-write functionality..."
-	@echo "📝 Creating test record..."
-	@curl -X POST http://localhost:8080/users \
-		-H "Content-Type: application/json" \
-		-d '{"name":"Test User","email":"test@example.com","gender":"Other","address":"Test Address"}'
-	@echo "✅ Dual-write test completed"
-
-phase-astra: ## Switch to direct Astra connection (Phase 5)
-	@echo "🚀 Phase 5: Switching to direct Astra DB connection..."
-	@./scripts/patch-api-astra.sh
-	@echo "✅ Direct Astra connection enabled"
-
-test-astra: ## Test direct Astra connection
-	@echo "🔍 Testing direct Astra connection..."
-	@curl -s http://localhost:8080/ | jq .
-	@curl -s http://localhost:8080/users?limit=5 | jq .
-	@echo "✅ Direct Astra connection verified"
-
-cleanup: ## Remove ZDM proxy (final cleanup)
-	@echo "🧹 Removing ZDM proxy..."
-	kubectl delete deployment zdm-proxy --ignore-not-found=true
-	kubectl delete service zdm-proxy-svc --ignore-not-found=true
-	kubectl delete configmap zdm-proxy-config --ignore-not-found=true
-	@echo "✅ ZDM proxy cleaned up"
-
 down: ## Teardown entire cluster
 	@echo "🧹 Tearing down kind cluster..."
-	kind delete cluster --name $(CLUSTER_NAME)
-	@echo "✅ Cluster removed successfully!"
+	kind delete cluster --name $(CLUSTER_NAME) || true
+	@echo "✅ Cluster deleted!"
 
-# Internal targets
-build-images:
+build-images: ## Build container images and load into kind
 	@echo "🔨 Building container images..."
-	@kind get clusters | grep -q "$(CLUSTER_NAME)" || { echo "❌ Error: Kind cluster '$(CLUSTER_NAME)' not found. Run 'make setup' first."; exit 1; }
 	@cd k8s/data-generator && $(CONTAINER_ENGINE) build -t data-generator:latest .
 	@$(CONTAINER_ENGINE) save data-generator:latest -o /tmp/data-generator.tar
 	@kind load image-archive /tmp/data-generator.tar --name $(CLUSTER_NAME)
@@ -256,16 +127,3 @@ kind-config.yaml:
 	@echo "  - containerPort: 30042" >> kind-config.yaml
 	@echo "    hostPort: 9042" >> kind-config.yaml
 	@echo "    protocol: TCP" >> kind-config.yaml
-
-# ZDM Phase Management
-phase-a: ## Set ZDM to Phase A (source only)
-	@echo "🔄 Setting ZDM to Phase A (source only)..."
-	@./scripts/update-zdm-phase.sh A
-
-phase-b: ## Set ZDM to Phase B (dual write)
-	@echo "🔄 Setting ZDM to Phase B (dual write)..."
-	@./scripts/update-zdm-phase.sh B
-
-phase-c: ## Set ZDM to Phase C (target only)
-	@echo "🔄 Setting ZDM to Phase C (target only)..."
-	@./scripts/update-zdm-phase.sh C

@@ -39,6 +39,13 @@ spec:
         #     secretKeyRef:
         #       name: zdm-proxy-secret
         #       key: astra-password
+        # - name: ASTRA_SECURE_BUNDLE_PATH
+        #   value: "/app/secure-connect.zip"
+        volumeMounts:
+        - name: astra-secrets
+          mountPath: /app/secure-connect.zip
+          subPath: secure-connect.zip
+          readOnly: true
         resources:
           requests:
             memory: "64Mi"
@@ -58,6 +65,11 @@ spec:
             port: 8080
           initialDelaySeconds: 30
           periodSeconds: 10
+      volumes:
+      - name: astra-secrets
+        secret:
+          secretName: zdm-proxy-secret
+          optional: true
 ---
 apiVersion: v1
 kind: Service
