@@ -85,10 +85,10 @@ curl -s http://localhost:8080/ | jq .
 # Test API functionality
 curl -s -X POST http://localhost:8080/users \
   -H "Content-Type: application/json" \
-  -d '{"name": "Demo User", "email": "demo@example.com", "gender": "Other", "address": "Demo Address"}' | jq .
+  -d '{"name": "Demo User", "email": "demo@example.com", "gender": "Male", "address": "Demo Address"}' | jq .
 
 # Verify record was created
-curl -s http://localhost:8080/users?limit=1 | jq .
+kubectl exec -it cassandra-0 -- cqlsh -e "SELECT id, name, email FROM demo.users WHERE email = 'demo@example.com' ALLOW FILTERING;"
 ```
 
 ### Step 3: Deploy ZDM Proxy (Origin-Only Mode)
@@ -140,7 +140,7 @@ Verify ZDM proxy routes all traffic to Cassandra only:
 # Create test record through ZDM
 curl -s -X POST http://localhost:8080/users \
   -H "Content-Type: application/json" \
-  -d '{"name": "ZDM Origin Test", "email": "zdm-origin@example.com", "gender": "Other", "address": "ZDM Test"}' | jq .
+  -d '{"name": "ZDM Origin Test", "email": "zdm-origin@example.com", "gender": "Female", "address": "ZDM Test"}' | jq .
 
 # Verify record exists in Cassandra
 kubectl exec -it cassandra-0 -- cqlsh -e "SELECT COUNT(*) FROM demo.users WHERE email = 'zdm-origin@example.com';"
@@ -209,7 +209,7 @@ Verify writes go to both Cassandra and Astra DB:
 # Create test record in dual-write mode
 curl -s -X POST http://localhost:8080/users \
   -H "Content-Type: application/json" \
-  -d '{"name": "Dual Write Test", "email": "dual-write@example.com", "gender": "Other", "address": "Dual Write Test"}' | jq .
+  -d '{"name": "Dual Write Test", "email": "dual-write@example.com", "gender": "Non-binary", "address": "Dual Write Test"}' | jq .
 
 # Verify record exists in Cassandra
 kubectl exec -it cassandra-0 -- cqlsh -e "SELECT COUNT(*) FROM demo.users WHERE email = 'dual-write@example.com';"
@@ -247,7 +247,7 @@ kubectl patch deployment zdm-proxy -p '{
 # Test target-only mode
 curl -s -X POST http://localhost:8080/users \
   -H "Content-Type: application/json" \
-  -d '{"name": "Target Only Test", "email": "target-only@example.com", "gender": "Other", "address": "Target Only"}' | jq .
+  -d '{"name": "Target Only Test", "email": "target-only@example.com", "gender": "Prefer not to say", "address": "Target Only"}' | jq .
 
 # This record should only exist in Astra DB, not in Cassandra
 ```
