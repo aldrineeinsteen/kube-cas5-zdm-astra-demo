@@ -17,10 +17,18 @@ from cassandra.policies import DCAwareRoundRobinPolicy
 import uvicorn
 
 # Configuration
+CONNECTION_MODE = os.getenv('CONNECTION_MODE', 'cassandra')  # 'cassandra', 'zdm', or 'astra'
 CASSANDRA_HOST = os.getenv('CASSANDRA_HOST', 'localhost')
 CASSANDRA_PORT = int(os.getenv('CASSANDRA_PORT', '9042'))
 CASSANDRA_USERNAME = os.getenv('CASSANDRA_USERNAME', 'cassandra')
 CASSANDRA_PASSWORD = os.getenv('CASSANDRA_PASSWORD', 'cassandra')
+
+# Astra DB configuration
+ASTRA_SECURE_BUNDLE_PATH = os.getenv('ASTRA_SECURE_BUNDLE_PATH')
+ASTRA_CLIENT_ID = os.getenv('ASTRA_CLIENT_ID')
+ASTRA_CLIENT_SECRET = os.getenv('ASTRA_CLIENT_SECRET')
+ASTRA_TOKEN = os.getenv('ASTRA_TOKEN')
+
 KEYSPACE = os.getenv('KEYSPACE', 'demo')
 TABLE = os.getenv('TABLE', 'users')
 
@@ -53,41 +61,80 @@ cluster = None
 session = None
 
 def get_cassandra_session():
-    """Get Cassandra session - NO FALLBACK, fails if configured endpoint unavailable"""
+    """Get database session based on CONNECTION_MODE"""
     global cluster, session
     
     if session is None:
-        # Use Astra token credentials when connecting through ZDM proxy
-        if CASSANDRA_HOST == "zdm-proxy-svc":
-            # When connecting through ZDM proxy, use Astra token credentials
-            # ZDM proxy forwards requests based on client credentials
-            astra_token = os.getenv('ASTRA_TOKEN')
-            if not astra_token:
-                raise Exception("ASTRA_TOKEN environment variable is required when connecting through ZDM proxy")
-            auth_provider = PlainTextAuthProvider(
-                username="token",
-                password=astra_token
-            )
-        else:
-            # Direct connection to Cassandra
-            auth_provider = PlainTextAuthProvider(
-                username=CASSANDRA_USERNAME,
-                password=CASSANDRA_PASSWORD
-            )
-        
-        print(f"Attempting connection to {CASSANDRA_HOST}:{CASSANDRA_PORT}")
-        
         try:
-            cluster = Cluster(
-                [CASSANDRA_HOST],
-                port=CASSANDRA_PORT,
-                auth_provider=auth_provider,
-                load_balancing_policy=DCAwareRoundRobinPolicy(),
-                connect_timeout=10
-            )
-            
-            session = cluster.connect(KEYSPACE)
-            print(f"Successfully connected to {CASSANDRA_HOST}:{CASSANDRA_PORT}")
+            if CONNECTION_MODE == 'astra':
+                # Direct Astra DB connection using secure connect bundle
+                print("Connecting directly to Astra DB...")
+                
+                if not ASTRA_SECURE_BUNDLE_PATH:
+                    raise Exception("ASTRA_SECURE_BUNDLE_PATH is required for Astra connection")
+                
+                if not os.path.exists(ASTRA_SECURE_BUNDLE_PATH):
+                    raise Exception(f"Secure connect bundle not found: {ASTRA_SECURE_BUNDLE_PATH}")
+                
+                # Use token authentication (preferred) or client credentials
+                if ASTRA_TOKEN:
+                    auth_provider = PlainTextAuthProvider(username="token", password=ASTRA_TOKEN)
+                    print("Using Astra token authentication")
+                elif ASTRA_CLIENT_ID and ASTRA_CLIENT_SECRET:
+                    auth_provider = PlainTextAuthProvider(username=ASTRA_CLIENT_ID, password=ASTRA_CLIENT_SECRET)
+                    print("Using Astra client credentials authentication")
+                else:
+                    raise Exception("Either ASTRA_TOKEN or ASTRA_CLIENT_ID/ASTRA_CLIENT_SECRET required for Astra connection")
+                
+                # Create cluster with cloud config
+                cloud_config = {'secure_connect_bundle': ASTRA_SECURE_BUNDLE_PATH}
+                cluster = Cluster(
+                    cloud=cloud_config,
+                    auth_provider=auth_provider,
+                    connect_timeout=30
+                )
+                
+                session = cluster.connect(KEYSPACE)
+                print(f"Successfully connected to Astra DB, keyspace: {KEYSPACE}")
+                
+            elif CONNECTION_MODE == 'zdm' or CASSANDRA_HOST == "zdm-proxy-svc":
+                # ZDM proxy connection
+                print(f"Connecting through ZDM proxy to {CASSANDRA_HOST}:{CASSANDRA_PORT}...")
+                
+                if not ASTRA_TOKEN:
+                    raise Exception("ASTRA_TOKEN is required when connecting through ZDM proxy")
+                
+                auth_provider = PlainTextAuthProvider(username="token", password=ASTRA_TOKEN)
+                cluster = Cluster(
+                    [CASSANDRA_HOST],
+                    port=CASSANDRA_PORT,
+                    auth_provider=auth_provider,
+                    load_balancing_policy=DCAwareRoundRobinPolicy(),
+                    connect_timeout=10
+                )
+                
+                session = cluster.connect(KEYSPACE)
+                print(f"Successfully connected through ZDM proxy to {CASSANDRA_HOST}:{CASSANDRA_PORT}")
+                
+            else:
+                # Direct Cassandra connection (default)
+                print(f"Connecting directly to Cassandra at {CASSANDRA_HOST}:{CASSANDRA_PORT}...")
+                
+                auth_provider = PlainTextAuthProvider(
+                    username=CASSANDRA_USERNAME,
+                    password=CASSANDRA_PASSWORD
+                )
+                
+                cluster = Cluster(
+                    [CASSANDRA_HOST],
+                    port=CASSANDRA_PORT,
+                    auth_provider=auth_provider,
+                    load_balancing_policy=DCAwareRoundRobinPolicy(),
+                    connect_timeout=10
+                )
+                
+                session = cluster.connect(KEYSPACE)
+                print(f"Successfully connected to Cassandra at {CASSANDRA_HOST}:{CASSANDRA_PORT}")
             
         except Exception as e:
             print(f"Failed to connect to {CASSANDRA_HOST}:{CASSANDRA_PORT}: {e}")
@@ -131,15 +178,22 @@ async def shutdown_event():
 @app.get("/")
 async def root():
     """Health check endpoint"""
-    connection_type = "Direct Cassandra"
-    if CASSANDRA_HOST == "zdm-proxy-svc":
-        connection_type = "ZDM Proxy (Phase B Dual Write)"
+    if CONNECTION_MODE == 'astra':
+        connection_type = "Direct Astra DB"
+        target = "Astra DB Cloud"
+    elif CONNECTION_MODE == 'zdm' or CASSANDRA_HOST == "zdm-proxy-svc":
+        connection_type = "ZDM Proxy"
+        target = f"{CASSANDRA_HOST}:{CASSANDRA_PORT}"
+    else:
+        connection_type = "Direct Cassandra"
+        target = f"{CASSANDRA_HOST}:{CASSANDRA_PORT}"
     
     return {
         "service": "Cassandra 5 ZDM Demo API",
         "status": "healthy",
+        "connection_mode": CONNECTION_MODE,
         "connection_type": connection_type,
-        "target": f"{CASSANDRA_HOST}:{CASSANDRA_PORT}",
+        "target": target,
         "keyspace": KEYSPACE
     }
 
