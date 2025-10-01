@@ -31,6 +31,11 @@ help: ## Show this help message
 	@echo "  status     - Check all components"
 	@echo "  logs       - Show logs from all services"
 	@echo "  down       - Teardown entire cluster"
+	@echo ""
+	@echo "ZDM Phase Management:"
+	@echo "  phase-a    - Set ZDM to Phase A (source only)"
+	@echo "  phase-b    - Set ZDM to Phase B (dual write)"
+	@echo "  phase-c    - Set ZDM to Phase C (target only)"
 
 setup: kind-config.yaml ## Create kind cluster
 	@echo "🚀 Creating kind cluster..."
@@ -75,7 +80,11 @@ test-api: ## Test API connectivity
 	@curl -s http://localhost:8080/users?limit=5 | jq .
 	@echo "✅ API responding correctly"
 
-zdm: ## Deploy ZDM proxy
+build-zdm: ## Build ZDM proxy ARM64 image and load into kind
+	@echo "🏗️  Building ZDM proxy ARM64 image..."
+	@./scripts/build-zdm-arm64.sh
+
+zdm: build-zdm ## Deploy ZDM proxy (builds ARM64 image first)
 	@echo "🚀 Deploying ZDM proxy..."
 	@if [ ! -f ".env" ]; then \
 		echo "❌ Error: .env file not found!"; \
@@ -106,7 +115,9 @@ zdm: ## Deploy ZDM proxy
 		--from-literal=astra-username="token" \
 		--from-literal=astra-password="$${ASTRA_TOKEN}" \
 		--from-file=secure-connect.zip="$${ASTRA_SECURE_BUNDLE_PATH}"
-	kubectl apply -f k8s/zdm-proxy/zdm-proxy-env.yaml
+	@echo "📋 Deploying ZDM proxy with version $${ZDM_VERSION:-v2.3.4}..."
+	@source .env && \
+	ZDM_VERSION=$${ZDM_VERSION:-v2.3.4} envsubst < k8s/zdm-proxy/zdm-proxy-env.yaml | kubectl apply -f -
 	@echo "⏳ Waiting for ZDM proxy to be ready..."
 	kubectl wait --for=condition=Available deployment/zdm-proxy --timeout=300s || { \
 		echo "❌ ZDM proxy failed to start. Checking logs..."; \
@@ -196,7 +207,7 @@ test-dual: ## Test dual-write functionality
 
 phase-astra: ## Switch to direct Astra connection (Phase 5)
 	@echo "🚀 Phase 5: Switching to direct Astra DB connection..."
-	@./patch-api-astra.sh
+	@./scripts/patch-api-astra.sh
 	@echo "✅ Direct Astra connection enabled"
 
 test-astra: ## Test direct Astra connection
@@ -245,3 +256,16 @@ kind-config.yaml:
 	@echo "  - containerPort: 30042" >> kind-config.yaml
 	@echo "    hostPort: 9042" >> kind-config.yaml
 	@echo "    protocol: TCP" >> kind-config.yaml
+
+# ZDM Phase Management
+phase-a: ## Set ZDM to Phase A (source only)
+	@echo "🔄 Setting ZDM to Phase A (source only)..."
+	@./scripts/update-zdm-phase.sh A
+
+phase-b: ## Set ZDM to Phase B (dual write)
+	@echo "🔄 Setting ZDM to Phase B (dual write)..."
+	@./scripts/update-zdm-phase.sh B
+
+phase-c: ## Set ZDM to Phase C (target only)
+	@echo "🔄 Setting ZDM to Phase C (target only)..."
+	@./scripts/update-zdm-phase.sh C

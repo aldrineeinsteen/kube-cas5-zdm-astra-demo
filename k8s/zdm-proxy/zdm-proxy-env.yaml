@@ -14,7 +14,8 @@ spec:
     spec:
       containers:
       - name: zdm-proxy
-        image: datastax/zdm-proxy:2.3.4
+        image: zdm-proxy-local:${ZDM_VERSION}
+        imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 9042
         env:
